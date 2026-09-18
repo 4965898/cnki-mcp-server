@@ -46,6 +46,28 @@ def _cnki_entry(python_exe: str) -> dict:
     }
 
 
+# 部分客户端（如 NoteGen）启动 stdio 子进程时只传配置里的 env，
+# 不继承系统环境。Windows 上 Python 启动必须有 SYSTEMROOT（实测缺它必失败：
+# runpy 无法初始化），Chromium 还需要 TEMP / LOCALAPPDATA / USERPROFILE 等。
+_SYSTEM_ENV_KEYS = [
+    "SYSTEMROOT", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "HOMEDRIVE", "HOMEPATH",
+    "PATH", "SystemDrive",
+]
+
+
+def _env_with_system_fallback(entry_env: dict) -> dict:
+    """补全系统关键环境变量（不覆盖已有设置）"""
+    env = dict(entry_env)
+    for key in _SYSTEM_ENV_KEYS:
+        value = os.environ.get(key)
+        if value and key not in env:
+            env[key] = value
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    return env
+
+
 def _stamp() -> str:
     return "bak-cnki-" + time.strftime("%Y%m%d")
 
@@ -183,13 +205,16 @@ def _write_notegen(entry: dict, results: list) -> None:
             ):
                 existing = s
                 break
+        # NoteGen 不继承系统环境，必须把关键变量写进条目 env
+        env_full = _env_with_system_fallback(entry["env"])
+
         if existing is not None:
             sid = existing.get("id") or ("mcp-" + str(int(time.time() * 1000)))
             existing.update({
                 "args": entry["args"],
                 "command": entry["command"],
                 "enabled": True,
-                "env": entry["env"],
+                "env": env_full,
                 "id": sid,
                 "name": "cnki 知网检索",
                 "type": "stdio",
@@ -201,7 +226,7 @@ def _write_notegen(entry: dict, results: list) -> None:
                 "command": entry["command"],
                 "createdAt": int(time.time() * 1000),
                 "enabled": True,
-                "env": entry["env"],
+                "env": env_full,
                 "id": sid,
                 "name": "cnki 知网检索",
                 "type": "stdio",
@@ -214,7 +239,7 @@ def _write_notegen(entry: dict, results: list) -> None:
             json.dump(data, f, ensure_ascii=False)
         # local-mcp.json 派生文件双保险
         json.dump(
-            {"mcpServers": {"cnki": dict(entry, disabled=False)}},
+            {"mcpServers": {"cnki": dict(entry, env=env_full, disabled=False)}},
             open(local, "w", encoding="utf-8"),
             ensure_ascii=False, indent=2,
         )
