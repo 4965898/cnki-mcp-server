@@ -16,7 +16,7 @@ import json as json_mod
 
 from cnki_mcp.exceptions import ExportError
 
-SUPPORTED_FORMATS = ["csv", "json", "bibtex", "ris"]
+SUPPORTED_FORMATS = ["csv", "json", "bibtex", "ris", "markdown"]
 
 
 def _make_bibtex_key(title: str, authors: list[str], year: str, index: int = 0) -> str:
@@ -127,11 +127,38 @@ def export_ris(papers: list[dict]) -> str:
     return "\n".join(entries)
 
 
+def export_markdown(papers: list[dict]) -> str:
+    """导出为 Markdown 表格"""
+    if not papers:
+        return ""
+    lines = ["| # | 标题 | 作者 | 来源 | 日期 | 被引 | 下载 |", "|---|---|---|---|---|---|---|"]
+
+    def _cell(text) -> str:
+        s = str(text if text is not None else "")
+        return s.replace("|", "\\|").replace("\n", " ")
+
+    for i, p in enumerate(papers, 1):
+        authors = p.get("authors", [])
+        if isinstance(authors, list):
+            authors = ", ".join(a.split("(")[0].strip() for a in authors)
+        title = _cell(p.get("title", ""))
+        url = p.get("url", "")
+        if url:
+            title = f"[{title}]({url})"
+        lines.append(
+            f"| {i} | {title} | {_cell(authors)} | {_cell(p.get('source', ''))} "
+            f"| {_cell(p.get('date', ''))} | {_cell(p.get('cited_count', '0'))} "
+            f"| {_cell(p.get('download_count', '0'))} |"
+        )
+    return "\n".join(lines)
+
+
 EXPORTERS = {
     "csv": export_csv,
     "json": export_json,
     "bibtex": export_bibtex,
     "ris": export_ris,
+    "markdown": export_markdown,
 }
 
 EXTENSIONS = {
@@ -139,6 +166,7 @@ EXTENSIONS = {
     "json": ".json",
     "bibtex": ".bib",
     "ris": ".ris",
+    "markdown": ".md",
 }
 
 

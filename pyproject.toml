@@ -1,7 +1,7 @@
 [project]
 name = "cnki-mcp-server"
-version = "0.2.1"
-description = "CNKI (中国知网) MCP Server — 通过 Model Context Protocol 检索中文学术论文"
+version = "0.3.0"
+description = "CNKI (中国知网) MCP Server — GB/T 7714-2025 引文、专业检索式、批量详情、本机浏览器复用、一键分发客户端配置"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

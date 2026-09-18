@@ -5,16 +5,29 @@
 
 **CNKI (中国知网) MCP Server** — 通过 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 为 AI Agent 提供中文学术论文检索能力。
 
+> **Fork 增强版 v0.3.0**（基于 upstream v0.2.1，个人优化，欢迎取用）：
+>
+> 1. **GB/T 7714-2025 引文格式（默认）** — 依据 2025 年 3 月发布的新国标：支持期刊/学位论文/会议/图书/报纸五种文献类型；网络首发自动著录 `[J/OL]` + 在线出版日期 + 获取路径；中文文献全角标点、西文半角标点；新增 `get_citation_all_styles` 一次生成全部 6 种风格。旧版 `gbt7714`（2015）兼容保留。
+> 2. **本机资源优先** — 支持环境变量 `CNKI_BROWSER_CHANNEL=chrome`（或 `msedge`）直接复用系统已装浏览器、`CNKI_BROWSER_EXECUTABLE` 指定浏览器路径；未找到 Playwright 内核时**默认不再自动下载**（约 300MB），确需下载设 `CNKI_AUTO_INSTALL=1`。
+> 3. **新增 4 个工具** — `professional_search`（知网专业检索式，如 `TI='翻译' AND KY='术语'`，实验性）、`batch_paper_details`（批量详情，自动限速防反爬）、`check_cnki_access`（连通性/418 拦截/验证码诊断）、`get_citation_all_styles`；`export_papers` 新增 **markdown** 表格格式。工具总数 6 → 10。
+> 4. **一键分发客户端配置** — `python -m cnki_mcp install-clients` 自动把本 MCP 写入本机已装的 WorkBuddy / VS Code / Trae CN / TRAE SOLO / Trae 国际版 / Codex / Cherry Studio / NoteGen（全部先备份；`--list` 仅探测，`--python` 指定解释器）。
+>
+> 测试: `pytest tests/`（42 passed，含 GB/T 7714-2025 标准示例逐字对照用例）。
+
 ## 功能
 
 | 工具 | 说明 | 需要浏览器 |
 |------|------|-----------|
 | `search_cnki` | 搜索 CNKI 论文，支持多页、多种搜索类型和排序 | 是 |
+| `professional_search` | **[新增]** 知网专业检索式精确组合检索（实验性） | 是 |
 | `get_paper_detail` | 获取论文详情（标题、摘要、作者、关键词、DOI 等 17 字段） | 是 |
+| `batch_paper_details` | **[新增]** 批量获取论文详情（限速防反爬） | 是 |
+| `check_cnki_access` | **[新增]** 连通性与反爬状态诊断（418/验证码） | 是 |
 | `find_best_match` | 快速匹配论文标题，验证引用信息 | 是 |
-| `format_citation` | 引文格式化（GB/T 7714, APA, MLA, Chicago, Vancouver） | 否 |
+| `format_citation` | 引文格式化（**GB/T 7714-2025 默认**、2015 兼容、APA, MLA, Chicago, Vancouver；5 种文献类型） | 否 |
+| `get_citation_all_styles` | **[新增]** 一次生成全部 6 种风格引文 | 否 |
 | `browse_journals` | 期刊浏览（学科分类、期刊搜索、最新文章） | 是 |
-| `export_papers` | 批量导出（CSV, JSON, BibTeX, RIS） | 否 |
+| `export_papers` | 批量导出（CSV, JSON, BibTeX, RIS, **Markdown**） | 否 |
 
 ### 搜索类型
 

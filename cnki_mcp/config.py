@@ -96,7 +96,8 @@ SORT_TYPE_ALIASES: dict[str, str] = {
 
 # ============ 引文格式 ============
 
-CITATION_STYLES = ["gbt7714", "apa", "mla", "chicago", "vancouver"]
+CITATION_STYLES = ["gbt7714-2025", "gbt7714", "apa", "mla", "chicago", "vancouver"]
+DEFAULT_CITATION_STYLE = "gbt7714-2025"
 
 # ============ 导出格式 ============
 

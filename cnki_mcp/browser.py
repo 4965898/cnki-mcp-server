@@ -81,6 +81,26 @@ def _parse_no_proxy(no_proxy: str) -> list[str]:
     return patterns
 
 
+def _get_browser_launch_options() -> dict:
+    """按优先级解析浏览器启动选项（默认使用本机已有资源，避免额外下载）：
+
+    1. CNKI_BROWSER_EXECUTABLE: 显式指定浏览器可执行文件路径（executable_path）
+    2. CNKI_BROWSER_CHANNEL:   使用系统已安装浏览器的 channel（如 chrome / msedge / chrome-beta）
+    3. 未设置时使用 Playwright 默认 Chromium（优先复用 %LOCALAPPDATA%/ms-playwright 已有缓存）
+    """
+    opts: dict = {}
+    exe = os.environ.get("CNKI_BROWSER_EXECUTABLE", "").strip()
+    if exe:
+        if not os.path.exists(exe):
+            raise BrowserError(f"CNKI_BROWSER_EXECUTABLE 指定的浏览器不存在: {exe}")
+        opts["executable_path"] = exe
+        return opts
+    channel = os.environ.get("CNKI_BROWSER_CHANNEL", "").strip()
+    if channel:
+        opts["channel"] = channel
+    return opts
+
+
 class AsyncBrowserPool:
     """异步 Playwright 浏览器池（共享 BrowserContext，Cookie 互通）"""
 
@@ -111,12 +131,15 @@ class AsyncBrowserPool:
                 "--disable-extensions",
             ]
 
+            launch_opts = _get_browser_launch_options()
+
             try:
                 self._playwright = await async_playwright().start()
                 self._browser = await self._playwright.chromium.launch(
                     headless=True,
                     proxy=proxy,
                     args=chromium_args,
+                    **launch_opts,
                 )
             except Exception as e:
                 if "Executable doesn't exist" in str(e) or "playwright" in str(e).lower():
@@ -126,6 +149,7 @@ class AsyncBrowserPool:
                         headless=True,
                         proxy=proxy,
                         args=chromium_args,
+                        **launch_opts,
                     )
                 else:
                     raise BrowserError(f"浏览器启动失败: {e}") from e
@@ -150,7 +174,20 @@ class AsyncBrowserPool:
         return self._browser
 
     async def _install_browser(self) -> None:
-        """安装 Playwright Chromium（含新版 Ubuntu fallback）"""
+        """安装 Playwright Chromium。
+
+        默认【不自动下载】（避免额外占用磁盘/流量）：若本机已有 Playwright 缓存内核
+        或通过 CNKI_BROWSER_CHANNEL/CNKI_BROWSER_EXECUTABLE 复用系统浏览器，则不会走到这里。
+        确需下载时请设置环境变量 CNKI_AUTO_INSTALL=1，或手动运行: playwright install chromium
+        """
+        if os.environ.get("CNKI_AUTO_INSTALL", "").strip().lower() not in ("1", "true", "yes"):
+            raise BrowserError(
+                "未找到可用的 Playwright Chromium 内核。请任选其一：\n"
+                "1) 设置 CNKI_BROWSER_CHANNEL=chrome（或 msedge）复用系统已安装的浏览器（推荐，零下载）；\n"
+                "2) 设置 CNKI_BROWSER_EXECUTABLE 指向浏览器可执行文件路径；\n"
+                "3) 设置 CNKI_AUTO_INSTALL=1 允许自动下载 Chromium（约 300MB）；\n"
+                "4) 手动运行: playwright install chromium"
+            )
         env = os.environ.copy()
         # Ubuntu 26.04+ Playwright 尚未官方支持，fallback 到 Ubuntu 24.04 的 Chromium 构建
         if not env.get("PLAYWRIGHT_HOST_PLATFORM_OVERRIDE"):
@@ -160,7 +197,7 @@ class AsyncBrowserPool:
                 [sys.executable, "-m", "playwright", "install", "chromium"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=120,
+                timeout=1200,
                 env=env,
             )
         except subprocess.CalledProcessError as e:

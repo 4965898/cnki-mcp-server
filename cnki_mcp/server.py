@@ -20,14 +20,16 @@ from fastmcp import Context, FastMCP
 from fastmcp.dependencies import CurrentContext
 from pydantic import Field
 
+from cnki_mcp.batch import batch_paper_details_impl, check_cnki_access_impl
 from cnki_mcp.browser import AsyncBrowserPool
-from cnki_mcp.citation import format_citation_impl
+from cnki_mcp.citation import format_citation_all_styles_impl, format_citation_impl
 from cnki_mcp.config import SEARCH_TYPES, SEARCH_TYPE_ALIASES
 from cnki_mcp.detail import get_paper_detail_impl
 from cnki_mcp.exceptions import CNKIError, CitationError, ExportError
 from cnki_mcp.export import export_papers_impl
 from cnki_mcp.journals import list_categories_impl, search_journals_impl, recent_articles_impl
 from cnki_mcp.match import find_best_match_impl
+from cnki_mcp.prosearch import professional_search_impl
 from cnki_mcp.search import search_cnki_impl
 
 
@@ -51,7 +53,7 @@ mcp = FastMCP(
     "CNKI 论文检索服务",
     lifespan=lifespan,
     instructions="""
-CNKI (中国知网) 论文检索 MCP 服务器。
+CNKI (中国知网) 论文检索 MCP 服务器（Fork 增强版）。
 
 ## 可用工具
 
@@ -66,33 +68,53 @@ CNKI (中国知网) 论文检索 MCP 服务器。
   - 支持: 相关度、发表时间、被引、下载、综合
   - 英文别名: relevance, date, cited, download, composite
 
+### professional_search（实验性）
+使用知网专业检索式直接查询，适合精确组合检索。
+- expr: 专业检索式，如 TI='人工智能' AND KY='教育'
+- 字段代码: SU 主题, TI 篇名, KY 关键词, AB 摘要, AU 作者, AF 单位, FU 基金, DOI 等
+
 ### get_paper_detail
 获取论文详情页的完整信息。
 - url: CNKI 论文详情页 URL（必填）
+
+### batch_paper_details
+批量获取多篇论文详情（自动限速防反爬）。
+- urls: 详情页 URL 的 JSON 数组字符串
+
+### check_cnki_access
+检查 CNKI 连通性/反爬状态（418 拦截、验证码检测），不抛异常，适合排查问题。
 
 ### find_best_match
 快速查找与输入标题最匹配的论文。
 - query: 论文标题（必填）
 
-## 可用资源
+### format_citation
+生成格式化引文。默认 GB/T 7714-2025（中文文献全角标点、西文半角，自动 [J]/[J/OL]）。
+- style: gbt7714-2025（默认）, gbt7714（2015 旧版）, apa, mla, chicago, vancouver
+- doc_type: journal/期刊（默认）, thesis/学位论文, conference/会议, book/图书, newspaper/报纸
+- 学位论文: source 填学位授予单位、place 填所在地
+- access_url: 提供时自动加 /OL 载体标识并著录获取路径
 
-### cnki://search-types
-返回支持的搜索类型列表。
+### get_citation_all_styles
+一次生成全部 6 种风格的引文，适合写作时对比选型。
 
-### cnki://status
-返回服务器状态信息。
+### browse_journals
+期刊导航：list_categories / search_journals / recent_articles。
+
+### export_papers
+批量导出论文：csv / json / bibtex / ris / markdown。
 
 ## 使用建议
-1. 先用 search_cnki 搜索论文列表
-2. 从结果中选择目标论文的 URL
-3. 用 get_paper_detail 获取完整详情
-4. 使用 sort="被引" 查找高被引论文
-5. 使用 sort="发表时间" 查找最新论文
+1. 精确组合检索用 professional_search；泛搜用 search_cnki
+2. 从结果中选 URL 后用 get_paper_detail（多篇用 batch_paper_details）
+3. 写论文引文默认 gbt7714-2025；中文文献自动全角标点
+4. 网络首发论文传 online_date 或 access_url 会自动著录为 [J/OL]
 
 ## 注意事项
+- 默认复用本机已有浏览器资源：可设 CNKI_BROWSER_CHANNEL=chrome（或 msedge）、
+  CNKI_BROWSER_EXECUTABLE=<路径> 指定浏览器；未找到内核时默认不自动下载，
+  如需自动下载设 CNKI_AUTO_INSTALL=1
 - 每次搜索建议 1-3 页，避免过多请求
-- 搜索间隔建议 2-3 秒，避免触发反爬
-- 浏览器实例会在首次调用时启动，后续复用（更快）
 """
 )
 
@@ -242,45 +264,166 @@ async def find_best_match(
 
 
 @mcp.tool()
-async def format_citation(
+async def professional_search(
+    expr: Annotated[str, Field(description="知网专业检索式，如 TI='人工智能' AND KY='教育'", min_length=1)],
+    ctx: Context,
+    pages: Annotated[int, Field(ge=1, le=10)] = 1,
+) -> dict:
+    """
+    使用知网专业检索式进行精确组合检索（实验性）。
+
+    检索式语法: 字段代码='检索词'，支持 AND/OR/NOT 组合。
+    字段代码: SU 主题, TKA 篇关摘, KY 关键词, TI 篇名, FT 全文, AU 作者,
+    FI 第一作者, RP 通讯作者, AF 单位, FU 基金, AB 摘要, RF 参考文献,
+    CLC 分类号, LY 文献来源, DOI
+
+    示例: TI='知识翻译' AND AB='国立编译馆'
+    """
+    await ctx.info(f"专业检索: {expr[:60]}")
+    await ctx.report_progress(progress=0, total=100)
+
+    pool = _get_pool(ctx)
+    page = await pool.new_page()
+    try:
+        result = await professional_search_impl(page, expr, pages)
+    except CNKIError as e:
+        result = {"isError": True, "error": str(e), "error_type": type(e).__name__, "papers": []}
+        await ctx.error(f"专业检索失败: {e}")
+    except Exception as e:
+        result = {"isError": True, "error": str(e), "error_type": "SearchError", "papers": []}
+        await ctx.error(f"专业检索异常: {e}")
+    finally:
+        await page.close()
+
+    await ctx.report_progress(progress=100, total=100)
+    return result
+
+
+@mcp.tool()
+async def batch_paper_details(
+    urls: Annotated[str, Field(description="论文详情页 URL 数组的 JSON 字符串，如 [\"url1\",\"url2\"]", min_length=1)],
+    ctx: Context,
+) -> dict:
+    """
+    批量获取多篇论文的详情（自动限速防反爬，单条失败不影响其余）。
+
+    通常先 search_cnki 得到论文列表，再把其中的 url 字段组成 JSON 数组传入。
+    """
+    import json as json_mod
+    try:
+        url_list = json_mod.loads(urls)
+        if not isinstance(url_list, list) or not url_list:
+            return {"isError": True, "error": "urls 必须是非空 JSON 数组", "error_type": "ValidationError"}
+    except json_mod.JSONDecodeError as e:
+        return {"isError": True, "error": f"JSON 解析失败: {e}", "error_type": "ValidationError"}
+
+    url_list = [u for u in url_list if isinstance(u, str)][:20]
+    await ctx.info(f"批量详情: 共 {len(url_list)} 篇")
+    pool = _get_pool(ctx)
+    page = await pool.new_page()
+    try:
+        result = await batch_paper_details_impl(page, url_list)
+    except Exception as e:
+        result = {"isError": True, "error": str(e), "error_type": "BatchError"}
+        await ctx.error(f"批量详情异常: {e}")
+    finally:
+        await page.close()
+    if not result.get("isError"):
+        await ctx.info(f"批量详情完成: {result.get('success_count')}/{result.get('total')} 成功")
+    return result
+
+
+@mcp.tool()
+async def check_cnki_access(ctx: Context) -> dict:
+    """
+    检查 CNKI 连通性与反爬状态（不抛异常）。
+
+    返回 accessible/status（ok / captcha / blocked / error）与诊断信息，
+    适合在搜索失败后排查是否被 418 拦截或触发验证码。
+    """
+    pool = _get_pool(ctx)
+    page = await pool.new_page()
+    try:
+        result = await check_cnki_access_impl(page)
+    except Exception as e:
+        result = {"accessible": False, "status": "error", "detail": str(e)[:200]}
+    finally:
+        await page.close()
+    return result
+
+
+@mcp.tool()
+async def get_citation_all_styles(
     ctx: Context,
     title: Annotated[str, Field(description="论文标题")],
-    authors: Annotated[str, Field(description="作者列表，逗号分隔（如：张三,李四,王五）")],
+    authors: Annotated[str, Field(description="作者列表，逗号分隔")],
     source: Annotated[str, Field(description="期刊/来源名称")],
     year: Annotated[str, Field(description="发表年份")],
     volume: Annotated[str, Field(description="卷号")] = "",
     issue: Annotated[str, Field(description="期号")] = "",
+    pages: Annotated[str, Field(description="页码")] = "",
+    doi: Annotated[str, Field(description="DOI")] = "",
+    doc_type: Annotated[str, Field(description="文献类型: journal/thesis/conference/book/newspaper")] = "journal",
+    access_url: Annotated[str, Field(description="获取和访问路径（电子资源）")] = "",
+    online_date: Annotated[str, Field(description="网络首发在线出版日期 YYYY-MM-DD")] = "",
+    place: Annotated[str, Field(description="出版地/学位授予单位所在地")] = "",
+    publisher: Annotated[str, Field(description="出版者/学位授予单位")] = "",
+) -> dict:
+    """
+    一次生成全部 6 种风格的引文（GB/T 7714-2025、2015、APA、MLA、Chicago、Vancouver），
+    适合论文写作时对比选用。参数含义同 format_citation。
+    """
+    await ctx.info(f"生成全部风格引文: {title[:50]}...")
+    try:
+        result = format_citation_all_styles_impl(
+            title=title, authors=authors, source=source, year=year,
+            volume=volume, issue=issue, pages=pages, doi=doi,
+            doc_type=doc_type, access_url=access_url,
+            online_date=online_date, place=place, publisher=publisher,
+        )
+        return result
+    except CitationError as e:
+        return {"isError": True, "error": str(e), "error_type": "CitationError"}
+    except Exception as e:
+        return {"isError": True, "error": str(e), "error_type": "CitationError"}
+
+
+@mcp.tool()
+async def format_citation(
+    ctx: Context,
+    title: Annotated[str, Field(description="论文标题")],
+    authors: Annotated[str, Field(description="作者列表，逗号分隔（如：张三,李四,王五）")],
+    source: Annotated[str, Field(description="期刊/来源名称（学位论文填学位授予单位）")],
+    year: Annotated[str, Field(description="发表年份")],
+    volume: Annotated[str, Field(description="卷号")] = "",
+    issue: Annotated[str, Field(description="期号（报纸填版次）")] = "",
     pages: Annotated[str, Field(description="起止页码（如：1-15）")] = "",
     doi: Annotated[str, Field(description="DOI")] = "",
     style: Annotated[str, Field(
-        description="引文风格: gbt7714, apa, mla, chicago, vancouver"
-    )] = "gbt7714",
+        description="引文风格: gbt7714-2025（默认，GB/T 7714-2025）, gbt7714（2015 旧版）, apa, mla, chicago, vancouver"
+    )] = "gbt7714-2025",
+    doc_type: Annotated[str, Field(
+        description="文献类型: journal/期刊（默认）, thesis/学位论文, conference/会议, book/图书, newspaper/报纸"
+    )] = "journal",
+    access_url: Annotated[str, Field(description="获取和访问路径（提供时自动著录 [X/OL]）")] = "",
+    online_date: Annotated[str, Field(description="网络首发在线出版日期 YYYY-MM-DD")] = "",
+    place: Annotated[str, Field(description="出版地/学位授予单位所在地")] = "",
+    publisher: Annotated[str, Field(description="出版者（图书）/学位授予单位（学位论文）")] = "",
 ) -> dict:
     """
     生成格式化引文。
 
-    支持 GB/T 7714-2015、APA 7th、MLA 9th、Chicago、Vancouver 五种风格。
-    适合在论文写作中快速生成参考文献引用。
-
-    Args:
-        title: 论文标题
-        authors: 作者列表（逗号分隔）
-        source: 期刊名称
-        year: 发表年份
-        volume: 卷号
-        issue: 期号
-        pages: 页码
-        doi: DOI
-        style: 引文风格
-
-    Returns:
-        包含格式化引文的字典
+    默认 GB/T 7714-2025（2025 年 3 月发布，中文文献全角标点、西文半角标点，
+    网络首发自动著录为 [J/OL]，支持期刊/学位论文/会议/图书/报纸五种文献类型）。
+    兼容 gbt7714（2015 旧版）、APA 7th、MLA 9th、Chicago、Vancouver。
     """
     await ctx.info(f"生成引文: style={style}, title={title[:50]}...")
     try:
         result = format_citation_impl(
             title=title, authors=authors, source=source, year=year,
             volume=volume, issue=issue, pages=pages, doi=doi, style=style,
+            doc_type=doc_type, access_url=access_url,
+            online_date=online_date, place=place, publisher=publisher,
         )
         await ctx.info(f"引文生成完成 ({style})")
         return result
@@ -398,20 +541,25 @@ async def get_search_types(ctx: Context) -> str:
 async def get_server_status(ctx: Context) -> str:
     """返回服务器状态信息"""
     return json.dumps({
-        "server_name": "CNKI 论文检索服务",
-        "version": "0.2.0",
+        "server_name": "CNKI 论文检索服务（Fork 增强版）",
+        "version": "0.3.0",
         "engine": "Playwright",
+        "browser_policy": "优先复用本机资源（CNKI_BROWSER_CHANNEL / CNKI_BROWSER_EXECUTABLE / 已有内核缓存），默认不自动下载",
         "features": [
+            "GB/T 7714-2025 引文格式（默认）",
+            "专业检索式（实验性）",
+            "批量论文详情",
+            "连通性/反爬状态检查",
+            "一键分发配置到本机 AI 客户端（python -m cnki_mcp install-clients）",
             "浏览器池复用",
             "空闲超时自动关闭（10分钟）",
             "async/await 原生异步",
-            "独立 Page 会话隔离",
             "反检测脚本注入",
-            "Playwright 自动等待",
         ],
         "tools": [
-            "search_cnki", "get_paper_detail", "find_best_match",
-            "format_citation", "browse_journals", "export_papers",
+            "search_cnki", "professional_search", "get_paper_detail", "batch_paper_details",
+            "check_cnki_access", "find_best_match", "format_citation", "get_citation_all_styles",
+            "browse_journals", "export_papers",
         ],
         "resources": [
             "cnki://search-types", "cnki://citation-styles",
@@ -426,13 +574,14 @@ async def get_citation_styles(ctx: Context) -> str:
     return json.dumps({
         "description": "支持的引文格式",
         "styles": {
-            "gbt7714": "GB/T 7714-2015 中国国家标准（中文论文推荐）",
+            "gbt7714-2025": "GB/T 7714-2025 中国国家标准（默认；支持期刊/学位论文/会议/图书/报纸，网络首发自动 [J/OL]，中文全角标点）",
+            "gbt7714": "GB/T 7714-2015 旧版国家标准（兼容保留）",
             "apa": "APA 7th Edition 美国心理学会",
             "mla": "MLA 9th Edition 现代语言学会",
             "chicago": "Chicago Notes & Bibliography",
             "vancouver": "Vancouver/ICMJE 生物医学通用格式",
         },
-        "default": "gbt7714",
+        "default": "gbt7714-2025",
     }, ensure_ascii=False, indent=2)
 
 
@@ -446,6 +595,7 @@ async def get_export_formats(ctx: Context) -> str:
             "csv": "CSV 表格，适合 Excel 打开",
             "bibtex": "BibTeX 格式，适合 LaTeX/Zotero",
             "ris": "RIS 格式，适合 EndNote/Mendeley/Zotero",
+            "markdown": "Markdown 表格，适合笔记与报告",
         },
         "default": "json",
     }, ensure_ascii=False, indent=2)
