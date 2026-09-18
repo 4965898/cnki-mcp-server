@@ -173,17 +173,39 @@ def _write_notegen(entry: dict, results: list) -> None:
         with open(store, encoding="utf-8-sig") as f:
             data = json.load(f)
         servers = data.setdefault("mcp.servers", [])
-        sid = "mcp-" + str(int(time.time() * 1000))
-        servers.append({
-            "args": entry["args"],
-            "command": entry["command"],
-            "createdAt": int(time.time() * 1000),
-            "enabled": True,
-            "env": entry["env"],
-            "id": sid,
-            "name": "cnki 知网检索",
-            "type": "stdio",
-        })
+
+        # 幂等：已存在 cnki 条目时复用其 id 并更新，避免重复安装产生多条
+        existing = None
+        for s in servers:
+            if s.get("name") == "cnki 知网检索" or (
+                s.get("type") == "stdio" and s.get("command") == entry["command"]
+                and s.get("args") == entry["args"]
+            ):
+                existing = s
+                break
+        if existing is not None:
+            sid = existing.get("id") or ("mcp-" + str(int(time.time() * 1000)))
+            existing.update({
+                "args": entry["args"],
+                "command": entry["command"],
+                "enabled": True,
+                "env": entry["env"],
+                "id": sid,
+                "name": "cnki 知网检索",
+                "type": "stdio",
+            })
+        else:
+            sid = "mcp-" + str(int(time.time() * 1000))
+            servers.append({
+                "args": entry["args"],
+                "command": entry["command"],
+                "createdAt": int(time.time() * 1000),
+                "enabled": True,
+                "env": entry["env"],
+                "id": sid,
+                "name": "cnki 知网检索",
+                "type": "stdio",
+            })
         selected = data.setdefault("mcp.selectedServerIds", [])
         if sid not in selected:
             selected.append(sid)

@@ -1,6 +1,6 @@
 [project]
 name = "cnki-mcp-server"
-version = "0.4.0"
+version = "0.4.1"
 description = "CNKI (中国知网) MCP Server — GB/T 7714-2025 引文、专业检索式、批量详情、本机浏览器复用、一键分发客户端配置"
 readme = "README.md"
 license = { text = "MIT" }
