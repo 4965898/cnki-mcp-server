@@ -5,13 +5,14 @@
 
 **CNKI (中国知网) MCP Server** — 通过 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 为 AI Agent 提供中文学术论文检索能力。
 
-> **Fork 增强版 v0.4.0**（基于 upstream v0.2.1，个人优化，欢迎取用）：
+> **Fork 增强版 v0.4.1**（基于 upstream v0.2.1，个人优化，欢迎取用）：
 >
 > 1. **GB/T 7714-2025 引文格式（默认）** — 依据 2025 年 3 月发布的新国标：支持期刊/学位论文/会议/图书/报纸五种文献类型；网络首发自动著录 `[J/OL]` + 在线出版日期 + 获取路径；中文文献全角标点、西文半角标点；新增 `get_citation_all_styles` 一次生成全部 6 种风格。旧版 `gbt7714`（2015）兼容保留。
 > 2. **本机资源优先** — 支持环境变量 `CNKI_BROWSER_CHANNEL=chrome`（或 `msedge`）直接复用系统已装浏览器、`CNKI_BROWSER_EXECUTABLE` 指定浏览器路径；未找到 Playwright 内核时**默认不再自动下载**（约 300MB），确需下载设 `CNKI_AUTO_INSTALL=1`。
 > 3. **新增工具（6 → 12）** — `professional_search`（知网专业检索式，实验性）、`batch_paper_details`（批量详情）、`check_cnki_access`（连通性诊断）、`get_citation_all_styles`、**`download_papers_pdf`（批量下载 PDF，机构订阅用户专用）**、**`check_download_permission`（下载权限预检）**；`export_papers` 新增 markdown。
-> 4. **一键分发客户端配置** — `python -m cnki_mcp install-clients` 自动把本 MCP 写入本机已装的 WorkBuddy / VS Code / Trae CN / TRAE SOLO / Trae 国际版 / Codex / Cherry Studio / NoteGen（全部先备份；`--list` 仅探测，`--python` 指定解释器）。
+> 4. **一键分发客户端配置** — `python -m cnki_mcp install-clients` 自动把本 MCP 写入本机已装的 WorkBuddy / VS Code / Trae CN / TRAE SOLO / Trae 国际版 / Codex / Cherry Studio / NoteGen（全部先备份；`--list` 仅探测，`--python` 指定解释器）。**幂等**：重复运行不会产生重复条目（v0.4.1 修复）。
 > 5. **`python -m cnki_mcp quota`** 查看当日下载配额使用情况。
+> 6. **故障排查与恢复** — 见文末专章（含分层排查法：清理磁盘 / 客户端内存态 / 浏览器内核三级定位）。
 >
 > 测试: `pytest tests/`（42 passed，含 GB/T 7714-2025 标准示例逐字对照用例）。
 
@@ -61,11 +62,22 @@
 
 ```bash
 pip install cnki-mcp-server
+```
+
+**本 fork 默认不下载浏览器内核**（upstream 会要求 `python -m playwright install chromium`）。启动优先级：
+
+1. `CNKI_BROWSER_EXECUTABLE=<浏览器路径>` — 显式指定
+2. `CNKI_BROWSER_CHANNEL=chrome`（或 `msedge`）— 复用系统已装的 Chrome / Edge，**零下载**
+3. 复用本机已有的 Playwright 内核缓存（Windows: `%LOCALAPPDATA%\ms-playwright`）— **零下载**
+4. 以上都没有时：默认报错并给出指引；确需下载才设 `CNKI_AUTO_INSTALL=1`（约 300MB）
+
+只在需要全新内核时才手动执行：
+
+```bash
+CNKI_AUTO_INSTALL=1 python -m cnki_mcp   # 或
 python -m playwright install chromium
 ```
 
-> **注意**: Playwright Chromium 约 300MB，首次安装需要下载，后续无需重复安装。
->
 > **新版 Ubuntu（26.04+）用户**: Playwright 尚未官方支持 Ubuntu 26.04，请设置环境变量后再安装 Chromium：
 > ```bash
 > PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 python -m playwright install chromium
@@ -361,6 +373,44 @@ waiting for locator("#txt_SearchText") to be visible
 **解决方法**: 将英文缩写替换为中文全称，例如：
 - `ECMO 抗凝` → `体外膜肺氧合 抗凝`
 - `AI 诊断` → `人工智能 诊断`
+
+### 客户端里 MCP 不可用（分层排查法）
+
+不要一上来重装。按五层从下往上验证，能快速定位到底坏在哪一层：
+
+| 层 | 验证方法 | 正常表现 |
+|---|---------|---------|
+| ① 解释器与包 | `<venv>\Scripts\python.exe -c "import cnki_mcp; print(cnki_mcp.__version__)"` | 打印版本号 |
+| ② 浏览器内核 | 检查 `%LOCALAPPDATA%\ms-playwright\chromium-*\chrome-win64\chrome.exe` 存在 | 新版目录名是 **`chrome-win64`**（旧版才是 `chrome-win`） |
+| ③ 服务器 | `<venv>\Scripts\python.exe -m cnki_mcp` 后发一条 `initialize` JSON-RPC | 返回 `serverInfo` |
+| ④ 浏览器真启动 | Playwright `chromium.launch(headless=True)` 后打开知网 | 拿到标题「中国知网」 |
+| ⑤ 客户端配置与进程 | 见下 | — |
+
+**⑤ 客户端层最常见的三类问题：**
+
+- **内存态缓存**（Cherry Studio、NoteGen 等）：清理磁盘或改配置时客户端仍在运行，它读的是启动时缓存的配置。**彻底退出再启动**（托盘常驻的要从托盘退出），多数情况重启即恢复。
+- **配置未生效**：图形客户端需要重启后才加载新配置；WorkBuddy 需在连接器页面对新 server 点 Trust。
+- **重新登记配置**：`python -m cnki_mcp install-clients` 幂等重刷（先备份，重复运行不会产生重复条目）。
+
+### 磁盘清理后失效
+
+实测经验：清理 C 盘通常**不会**影响本 MCP——venv、内核缓存、配置都在，命令行与浏览器均正常，报错几乎都来自客户端内存态（重启即可）。各组件位置：
+
+| 组件 | 位置 | 说明 |
+|---|---|---|
+| venv 解释器 | `~/.workbuddy/binaries/python/envs/cnki/` | 被删才需重装依赖 |
+| 浏览器内核 | `%LOCALAPPDATA%\ms-playwright/` | 被删可设 `CNKI_AUTO_INSTALL=1` 重下，或用 `CNKI_BROWSER_CHANNEL=chrome` 改用系统 Chrome |
+| 下载配额 | `~/.cnki-mcp/download_quota.json` | 删掉即重置为 0 |
+| NoteGen 配置 | `%APPDATA%/com.codexu.NoteGen/store.json` 的 `mcp.servers` | `local-mcp.json` 只是派生文件，会被应用重写 |
+| Cherry Studio 配置 | `%APPDATA%/CherryStudio/Data/cherrystudio.sqlite` 的 `mcp_server` 表 | 需完全退出应用后再改 |
+
+### 下载配额已用完
+
+```
+今日下载配额已用完（100 篇/日，已用 100）
+```
+
+配额按自然日计，次日自动重置。查看用 `python -m cnki_mcp quota`；调整限额设 `CNKI_DAILY_LIMIT`；确需重置可删除 `~/.cnki-mcp/download_quota.json`。
 
 ## 许可
 
