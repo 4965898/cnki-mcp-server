@@ -163,6 +163,7 @@ class AsyncBrowserPool:
                 viewport={"width": 1920, "height": 1080},
                 locale="zh-CN",
                 proxy=proxy,
+                accept_downloads=True,
             )
             await self._context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {

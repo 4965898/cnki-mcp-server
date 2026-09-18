@@ -25,6 +25,7 @@ from cnki_mcp.browser import AsyncBrowserPool
 from cnki_mcp.citation import format_citation_all_styles_impl, format_citation_impl
 from cnki_mcp.config import SEARCH_TYPES, SEARCH_TYPE_ALIASES
 from cnki_mcp.detail import get_paper_detail_impl
+from cnki_mcp.downloader import check_download_permission_impl, download_papers_impl
 from cnki_mcp.exceptions import CNKIError, CitationError, ExportError
 from cnki_mcp.export import export_papers_impl
 from cnki_mcp.journals import list_categories_impl, search_journals_impl, recent_articles_impl
@@ -97,6 +98,15 @@ CNKI (中国知网) 论文检索 MCP 服务器（Fork 增强版）。
 
 ### get_citation_all_styles
 一次生成全部 6 种风格的引文，适合写作时对比选型。
+
+### download_papers_pdf（机构订阅用户）
+批量下载论文 PDF 到指定文件夹。仅在校园网/图书馆等已购权限网络内使用。
+- 内置每日配额硬限制（默认 100 篇，CNKI_DAILY_LIMIT 可调），超限自动停止
+- 每篇随机限速 8~15 秒；无 PDF 按钮自动跳过（allow_caj=true 可下 CAJ）
+- 已存在文件自动跳过，支持断点续传
+
+### check_download_permission
+检测当前网络是否具有下载权限（IP 机构识别 + 下载按钮探测），不真正下载。
 
 ### browse_journals
 期刊导航：list_categories / search_journals / recent_articles。
@@ -217,6 +227,83 @@ async def get_paper_detail(
     await ctx.report_progress(progress=100, total=100)
     if not result.get("isError"):
         await ctx.info(f"获取详情成功: {result.get('title', '')[:50]}")
+    return result
+
+
+@mcp.tool()
+async def download_papers_pdf(
+    urls: Annotated[str, Field(description="论文详情页 URL 数组的 JSON 字符串（按下载顺序排列）", min_length=1)],
+    output_dir: Annotated[str, Field(description="PDF 保存目录（绝对路径，如 D:\\文献\\2026）", min_length=1)],
+    ctx: Context,
+    max_count: Annotated[int, Field(description="本次最多下载篇数（可不填，默认受每日配额限制）", ge=1, le=200)] = 0,
+    filename_style: Annotated[str, Field(description="文件名风格: index（序号_标题）, author（作者_标题）, year（年份_标题）")] = "index",
+    allow_caj: Annotated[bool, Field(description="无 PDF 时是否允许下载 CAJ（老文献常见，需 CAJViewer 阅读）")] = False,
+) -> dict:
+    """
+    批量下载论文 PDF 到指定文件夹（仅供机构订阅用户在授权网络内使用）。
+
+    内置保护：
+    - 每日配额硬限制（默认 100 篇/日，环境变量 CNKI_DAILY_LIMIT 可调），
+      本地持久化计数，超限自动停止，次日自动重置
+    - 每篇之间随机限速 8~15 秒
+    - 无 PDF 按钮的文献自动跳过并在结果中标注（allow_caj=true 可下 CAJ）
+    - 空文件拦截（<1KB 视为权限拦截页，不计入配额）
+    - 已存在的同名文件自动跳过，可断点续传
+
+    Returns:
+        下载结果清单（含每篇 ok/path/error）与当日配额使用情况
+    """
+    import json as json_mod
+    try:
+        url_list = json_mod.loads(urls)
+        if not isinstance(url_list, list) or not url_list:
+            return {"isError": True, "error": "urls 必须是非空 JSON 数组", "error_type": "ValidationError"}
+    except json_mod.JSONDecodeError as e:
+        return {"isError": True, "error": f"JSON 解析失败: {e}", "error_type": "ValidationError"}
+
+    url_list = [u for u in url_list if isinstance(u, str)][:200]
+    await ctx.info(f"批量下载: {len(url_list)} 篇 -> {output_dir}")
+    pool = _get_pool(ctx)
+    page = await pool.new_page()
+    try:
+        result = await download_papers_impl(
+            page, url_list, output_dir,
+            max_count=max_count or None,
+            filename_style=filename_style,
+            allow_caj=allow_caj,
+        )
+    except Exception as e:
+        result = {"isError": True, "error": str(e), "error_type": "DownloadError"}
+        await ctx.error(f"批量下载异常: {e}")
+    finally:
+        await page.close()
+    if not result.get("isError"):
+        await ctx.info(
+            f"下载完成: {result.get('success_count')}/{result.get('attempted')} 成功，"
+            f"今日配额 {result.get('quota', {}).get('count', '?')}/{result.get('daily_limit')}"
+        )
+    return result
+
+
+@mcp.tool()
+async def check_download_permission(
+    ctx: Context,
+    probe_url: Annotated[str, Field(description="一篇有 PDF 下载权限文献的详情页 URL（推荐提供，用于实测下载入口）")] = "",
+) -> dict:
+    """
+    检测当前网络是否具有知网下载权限（不真正下载文件）。
+
+    在校园网/图书馆网络下使用：探测 IP 机构识别页 + 指定详情页的下载按钮，
+    建议先于批量下载调用，避免在无权限网络下空跑。
+    """
+    pool = _get_pool(ctx)
+    page = await pool.new_page()
+    try:
+        result = await check_download_permission_impl(page, probe_url.strip())
+    except Exception as e:
+        result = {"error": str(e)[:200], "error_type": "PermissionCheckError"}
+    finally:
+        await page.close()
     return result
 
 
@@ -559,7 +646,7 @@ async def get_server_status(ctx: Context) -> str:
         "tools": [
             "search_cnki", "professional_search", "get_paper_detail", "batch_paper_details",
             "check_cnki_access", "find_best_match", "format_citation", "get_citation_all_styles",
-            "browse_journals", "export_papers",
+            "browse_journals", "export_papers", "download_papers_pdf", "check_download_permission",
         ],
         "resources": [
             "cnki://search-types", "cnki://citation-styles",
