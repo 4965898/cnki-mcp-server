@@ -16,6 +16,39 @@
 >
 > 测试: `pytest tests/`（42 passed，含 GB/T 7714-2025 标准示例逐字对照用例）。
 
+## 手机端接入（RikkaHub 等仅支持 HTTP 的客户端）
+
+Android 客户端（如 RikkaHub）无法启动 stdio 子进程，请使用 HTTP 模式：
+
+1. **在电脑上启动服务**（监听局域网）：
+
+   ```bash
+   python -m cnki_mcp serve-http --host 0.0.0.0 --port 37777
+   ```
+
+   仓库内已备好两个脚本：`run-http-server.bat`（带窗口，便于看日志）与
+   `launch-http-hidden.vbs`（无窗口，放入启动文件夹即开机自启：
+   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`）。
+   日志落在 `logs/cnki-http.log`。
+
+2. **放行防火墙**：允许入站 TCP 37777（仅需一次）：
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "CNKI MCP HTTP (TCP 37777)" -Direction Inbound -Protocol TCP -LocalPort 37777 -Action Allow
+   ```
+
+3. **在 RikkaHub 中新建连接**：设置 → MCP → 新建
+   - 名称：`cnki`
+   - 传输类型：**Streamable HTTP**
+   - URL：`http://<电脑局域网IP>:37777/mcp`（如 `http://192.168.0.210:37777/mcp`）
+   - 保存后状态变为 Connected，应同步出 12 个工具；聊天页面需手动启用该 MCP
+
+4. **注意事项**
+   - 手机与电脑须在同一局域网；Android 首次连接会申请「本地网络」权限，需允许
+   - 电脑 IP 变化时 URL 需同步修改，建议在路由器为电脑做 DHCP 地址保留
+   - 服务监听 `0.0.0.0` 意味着同网段设备均可访问（无鉴权）。仅建议在可信网络使用；
+     下载能力有 100 篇/日配额硬限制兜底
+
 ## 批量下载 PDF（机构订阅用户）
 
 ```json
