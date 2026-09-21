@@ -16,6 +16,42 @@
 >
 > 测试: `pytest tests/`（42 passed，含 GB/T 7714-2025 标准示例逐字对照用例）。
 
+## 部署为 Windows 服务（推荐：彻底方案）
+
+用 [NSSM](https://nssm.cc/) 把服务注册为系统服务，可同时获得三个能力：
+**开机即启动（无需用户登录）** + **完全无窗口** + **崩溃自动重启**。
+
+```powershell
+# nssm.exe 置于 tools/ 下（官方 nssm-2.24 的 win64 版本）
+$nssm = ".\tools\nssm.exe"
+
+& $nssm install CNKIMcpHttp "<venv>\Scripts\python.exe" -m cnki_mcp serve-http --host 0.0.0.0 --port 37777
+& $nssm set CNKIMcpHttp AppDirectory "<repo>"
+& $nssm set CNKIMcpHttp DisplayName "CNKI MCP HTTP Service"
+& $nssm set CNKIMcpHttp AppEnvironmentExtra "CNKI_BROWSER_CHANNEL=chrome" "NO_PROXY=cnki.net,*.cnki.net"
+& $nssm set CNKIMcpHttp AppStdout "<repo>\logs\service-out.log"
+& $nssm set CNKIMcpHttp AppStderr "<repo>\logs\service-err.log"
+& $nssm set CNKIMcpHttp Start SERVICE_AUTO_START
+& $nssm set CNKIMcpHttp AppExit Default Restart
+& $nssm set CNKIMcpHttp AppRestartDelay 5000
+& $nssm start CNKIMcpHttp
+```
+
+**日常管理**：
+
+| 操作 | 命令 |
+|---|---|
+| 查看状态 | `nssm status CNKIMcpHttp`（应为 `SERVICE_RUNNING`） |
+| 停止 / 启动 / 重启 | `nssm stop\|start\|restart CNKIMcpHttp` |
+| 卸载服务 | `nssm remove CNKIMcpHttp confirm` |
+
+**两点注意**：
+
+- 改用服务后，**应停用启动文件夹里的自启脚本**（否则登录后会再起一个实例抢 37777 端口）；
+- 服务以 LocalSystem 运行，日志分别为 `logs/service-out.log` 与 `logs/service-err.log`。
+
+**实测记录**：注册后三处地址（回环 / 局域网 / Tailscale）均 `HTTP 200`；手动结束服务进程后 **6 秒自动恢复**并正常响应。
+
 ## 手机端接入（RikkaHub 等仅支持 HTTP 的客户端）
 
 Android 客户端（如 RikkaHub）无法启动 stdio 子进程，请使用 HTTP 模式：

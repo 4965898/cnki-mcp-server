@@ -11,3 +11,4 @@ venv/
 .ruff_cache/
 .playwright/
 logs/
+tools/
