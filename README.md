@@ -49,6 +49,19 @@ Android 客户端（如 RikkaHub）无法启动 stdio 子进程，请使用 HTTP
    - 服务监听 `0.0.0.0` 意味着同网段设备均可访问（无鉴权）。仅建议在可信网络使用；
      下载能力有 100 篇/日配额硬限制兜底
 
+### 跨网络访问：手机流量或异地（Tailscale）
+
+局域网方案要求手机与电脑同一 WiFi。要让手机在**流量或任意 WiFi** 下访问，用 Tailscale 把两端组成加密虚拟局域网：
+
+1. 电脑与手机分别安装 Tailscale（Windows 官网安装包；Android 用 Google Play 或官网 APK），**登录同一账号**
+2. 客户端 URL 换成电脑的 Tailscale 地址：`http://<电脑TailscaleIP>:37777/mcp`（形如 `http://100.87.180.39:37777/mcp`）——该地址**固定不变**，不受路由器分配影响
+3. 成立条件：电脑开机（不睡眠）+ 两端 Tailscale 在线 + MCP 服务在跑
+4. 手机开着 Tailscale **不影响日常上网**（默认只有访问 `100.x.x.x` 的流量走隧道）
+
+> 安装踩坑：若安装时报 `Some Windows system services required by Tailscale are currently disabled ... iphlpsvc`，
+> 说明 IP Helper 服务被优化工具禁用，需 `Set-Service -Name iphlpsvc -StartupType Automatic; Start-Service iphlpsvc`。
+> 国内若登录/中继不稳，可改用蒲公英（贝锐）等国内组网方案。
+
 ## 批量下载 PDF（机构订阅用户）
 
 ```json
@@ -103,6 +116,18 @@ pip install cnki-mcp-server
 2. `CNKI_BROWSER_CHANNEL=chrome`（或 `msedge`）— 复用系统已装的 Chrome / Edge，**零下载**
 3. 复用本机已有的 Playwright 内核缓存（Windows: `%LOCALAPPDATA%\ms-playwright`）— **零下载**
 4. 以上都没有时：默认报错并给出指引；确需下载才设 `CNKI_AUTO_INSTALL=1`（约 300MB）
+
+> **⚠️ 长期运行的服务请优先固定 `CNKI_BROWSER_CHANNEL=chrome`（或 `msedge`）**
+>
+> Playwright 的内核缓存（`%LOCALAPPDATA%\ms-playwright`）**很容易被「C 盘清理」类工具整目录删空**
+> （实测：683MB 缓存变为空目录），届时所有依赖它的调用都会报
+> 「未找到可用的 Playwright Chromium 内核」。复用系统浏览器既有零下载的优势，
+> 也彻底摆脱这个隐患——系统浏览器不会被清理工具当垃圾处理。
+> 在启动脚本里写死即可：
+>
+> ```bat
+> set CNKI_BROWSER_CHANNEL=chrome
+> ```
 
 只在需要全新内核时才手动执行：
 
