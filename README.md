@@ -50,25 +50,33 @@ $nssm = ".\tools\nssm.exe"
 - 改用服务后，**应停用启动文件夹里的自启脚本**（否则登录后会再起一个实例抢 37777 端口）；
 - 服务以 LocalSystem 运行，日志分别为 `logs/service-out.log` 与 `logs/service-err.log`。
 
-**⚠️ 以服务（LocalSystem / Session 0）运行时的浏览器选择**（实测结论）：
+**⚠️ 服务模式下的浏览器选择**（实测结论：关键在**服务账户身份**，不在"服务模式"本身）
 
-| 方案 | 服务会话下 | 说明 |
+| 运行账户 | 系统浏览器（`CNKI_BROWSER_CHANNEL=chrome/msedge`） | 说明 |
 |---|---|---|
-| 系统浏览器（`CNKI_BROWSER_CHANNEL=chrome/msedge`） | ❌ **不可用** | 系统浏览器在 Session 0 下启动后立即退出（`Target page, context or browser has been closed`）；且系统 Chrome 还可能因自动更新而损坏（SxS 配置错误） |
-| **Playwright 自带 Chromium** | ✅ **推荐** | 官方支持无桌面会话；把内核放在非系统盘可彻底避开「C 盘清理」 |
+| **用户账户**（推荐） | ✅ **可用** | 有完整用户 profile 环境；零下载、零额外占用 |
+| LocalSystem | ❌ 不可用 | 启动后立即退出（`Target page, context or browser has been closed`、`exitCode=1002`） |
+| LocalSystem + Playwright 自带内核 | ✅ 可用（备选） | 需 `PLAYWRIGHT_BROWSERS_PATH` 指向非系统盘 + `CNKI_AUTO_INSTALL=1` |
 
-服务模式下的推荐配置（内核放 A 盘，`CNKI_AUTO_INSTALL=1` 兜底）：
+**推荐配置：服务以用户账户运行 + 复用系统 Edge**（管理员 PowerShell）：
+
+```powershell
+& $nssm set CNKIMcpHttp ObjectName ".\<用户名>" "<密码>"
+& $nssm set CNKIMcpHttp AppEnvironmentExtra "CNKI_BROWSER_CHANNEL=msedge" "NO_PROXY=cnki.net,*.cnki.net"
+& $nssm restart CNKIMcpHttp
+```
+
+> 两个易踩的坑：① `<用户名>` 要用**账户名**（`C:\Users\<目录名>` 不一定是账户名，用错会报 `LsaLookupNames: 帐户名与安全标识间无任何映射`）；② **密码是延迟验证**——设置时会"成功"，但**启动时**才校验，若报「由于登录失败而无法启动服务」即密码错误。空密码账户不能作服务账户。
+
+**备选配置：LocalSystem + Playwright 自带内核**（内核放非系统盘，避开 C 盘清理）：
 
 ```powershell
 & $nssm set CNKIMcpHttp AppEnvironmentExtra `
-    "PLAYWRIGHT_BROWSERS_PATH=A:\...\cnki-mcp-server\pw-browsers" `
-    "CNKI_AUTO_INSTALL=1" `
-    "NO_PROXY=cnki.net,*.cnki.net"
-# 首次安装内核（在仓库目录执行）
-$env:PLAYWRIGHT_BROWSERS_PATH="$PWD\pw-browsers"; python -m playwright install chromium
+    "PLAYWRIGHT_BROWSERS_PATH=D:\...\pw-browsers" "CNKI_AUTO_INSTALL=1" "NO_PROXY=cnki.net,*.cnki.net"
+# 首次安装内核：$env:PLAYWRIGHT_BROWSERS_PATH="<同上>"; python -m playwright install chromium
 ```
 
-**实测记录**：注册后三处地址（回环 / 局域网 / Tailscale）均 `HTTP 200`；手动结束服务进程后 **6 秒自动恢复**并正常响应；改用 A 盘自带内核后，服务模式下 `search_cnki` 正常返回结果。
+**实测记录**：注册后三处地址（回环 / 局域网 / Tailscale）均 `HTTP 200`；手动结束服务进程后 **6 秒自动恢复**；以用户账户运行 + Edge 时 `search_cnki` 正常返回结果。
 
 ## 手机端接入（RikkaHub 等仅支持 HTTP 的客户端）
 
