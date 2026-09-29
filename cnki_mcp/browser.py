@@ -142,7 +142,14 @@ class AsyncBrowserPool:
                     **launch_opts,
                 )
             except Exception as e:
-                if "Executable doesn't exist" in str(e) or "playwright" in str(e).lower():
+                msg = str(e)
+                # 仅当确属"内核缺失"时才走安装/提示路径；
+                # 其余错误（权限、spawn 失败、SxS 损坏等）原样上抛，避免掩盖真实原因
+                missing_kernel = (
+                    "Executable doesn't exist" in msg
+                    or "please run the following command to download new browsers" in msg
+                )
+                if missing_kernel:
                     await self._install_browser()
                     self._playwright = await async_playwright().start()
                     self._browser = await self._playwright.chromium.launch(

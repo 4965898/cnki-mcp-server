@@ -12,3 +12,4 @@ venv/
 .playwright/
 logs/
 tools/
+pw-browsers/

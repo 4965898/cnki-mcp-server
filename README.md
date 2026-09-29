@@ -50,7 +50,25 @@ $nssm = ".\tools\nssm.exe"
 - 改用服务后，**应停用启动文件夹里的自启脚本**（否则登录后会再起一个实例抢 37777 端口）；
 - 服务以 LocalSystem 运行，日志分别为 `logs/service-out.log` 与 `logs/service-err.log`。
 
-**实测记录**：注册后三处地址（回环 / 局域网 / Tailscale）均 `HTTP 200`；手动结束服务进程后 **6 秒自动恢复**并正常响应。
+**⚠️ 以服务（LocalSystem / Session 0）运行时的浏览器选择**（实测结论）：
+
+| 方案 | 服务会话下 | 说明 |
+|---|---|---|
+| 系统浏览器（`CNKI_BROWSER_CHANNEL=chrome/msedge`） | ❌ **不可用** | 系统浏览器在 Session 0 下启动后立即退出（`Target page, context or browser has been closed`）；且系统 Chrome 还可能因自动更新而损坏（SxS 配置错误） |
+| **Playwright 自带 Chromium** | ✅ **推荐** | 官方支持无桌面会话；把内核放在非系统盘可彻底避开「C 盘清理」 |
+
+服务模式下的推荐配置（内核放 A 盘，`CNKI_AUTO_INSTALL=1` 兜底）：
+
+```powershell
+& $nssm set CNKIMcpHttp AppEnvironmentExtra `
+    "PLAYWRIGHT_BROWSERS_PATH=A:\...\cnki-mcp-server\pw-browsers" `
+    "CNKI_AUTO_INSTALL=1" `
+    "NO_PROXY=cnki.net,*.cnki.net"
+# 首次安装内核（在仓库目录执行）
+$env:PLAYWRIGHT_BROWSERS_PATH="$PWD\pw-browsers"; python -m playwright install chromium
+```
+
+**实测记录**：注册后三处地址（回环 / 局域网 / Tailscale）均 `HTTP 200`；手动结束服务进程后 **6 秒自动恢复**并正常响应；改用 A 盘自带内核后，服务模式下 `search_cnki` 正常返回结果。
 
 ## 手机端接入（RikkaHub 等仅支持 HTTP 的客户端）
 
